@@ -3,7 +3,6 @@ import requests
 import numpy as np
 from PIL import Image
 from PIL.ExifTags import TAGS
-from geopy.geocoders import Nominatim
 
 st.set_page_config(
     page_title="Canada Wildfire Risk System",
@@ -17,27 +16,22 @@ tab1, tab2 = st.tabs([
     "📸 Photo Analyzer"
 ])
 
-
 # --------------------------
 # COMMON FUNCTIONS
 # --------------------------
 
 def calculate_risk(temp, humidity, wind):
+
     score = 0
-
-    # Temperature
     score += min(temp, 40) / 40 * 35
-
-    # Humidity
     score += (100 - humidity) / 100 * 45
-
-    # Wind
     score += min(wind, 50) / 50 * 20
 
     return round(min(score, 100), 1)
 
 
 def risk_level(score):
+
     if score >= 85:
         return "EXTREME"
     elif score >= 65:
@@ -49,6 +43,7 @@ def risk_level(score):
 
 
 def get_weather(lat, lon):
+
     url = (
         f"https://api.open-meteo.com/v1/forecast"
         f"?latitude={lat}"
@@ -58,8 +53,7 @@ def get_weather(lat, lon):
         f"wind_speed_10m"
     )
 
-    response = requests.get(url, timeout=15)
-    data = response.json()
+    data = requests.get(url, timeout=15).json()
 
     current = data["current"]
 
@@ -69,7 +63,6 @@ def get_weather(lat, lon):
         current["wind_speed_10m"]
     )
 
-
 # --------------------------
 # TAB 1 - TOWN CHECKER
 # --------------------------
@@ -78,10 +71,7 @@ with tab1:
 
     st.header("📍 Town Risk Checker")
 
-    town = st.text_input(
-        "Enter a Canadian town or city",
-        "New Westminster"
-    )
+    town = st.text_input("Enter a Canadian town", "New Westminster")
 
     def get_coordinates(city):
 
@@ -94,67 +84,37 @@ with tab1:
             "&countryCode=CA"
         )
 
-        response = requests.get(url, timeout=15)
-        data = response.json()
+        data = requests.get(url, timeout=15).json()
 
         if "results" not in data:
             return None
 
-        result = data["results"][0]
+        r = data["results"][0]
 
-        return (
-            result["latitude"],
-            result["longitude"],
-            result["name"]
-        )
+        return r["latitude"], r["longitude"], r["name"]
 
     if st.button("Check Town Risk"):
 
-        try:
+        result = get_coordinates(town)
 
-            result = get_coordinates(town)
+        if result is None:
+            st.error("Location not found")
+        else:
 
-            if result is None:
-                st.error("Canadian location not found.")
+            lat, lon, name = result
+            temp, humidity, wind = get_weather(lat, lon)
 
-            else:
+            risk = calculate_risk(temp, humidity, wind)
+            level = risk_level(risk)
 
-                lat, lon, location_name = result
+            st.success(f"📍 {name}")
 
-                temp, humidity, wind = get_weather(
-                    lat,
-                    lon
-                )
+            st.write(f"🌡 Temp: {temp}°C")
+            st.write(f"💧 Humidity: {humidity}%")
+            st.write(f"💨 Wind: {wind} km/h")
 
-                risk = calculate_risk(
-                    temp,
-                    humidity,
-                    wind
-                )
-
-                level = risk_level(risk)
-
-                st.success(
-                    f"📍 Location: {location_name}"
-                )
-
-                st.write(f"🌡 Temperature: {temp}°C")
-                st.write(f"💧 Humidity: {humidity}%")
-                st.write(f"💨 Wind Speed: {wind} km/h")
-
-                st.metric(
-                    "Wildfire Risk Score",
-                    f"{risk}/100"
-                )
-
-                st.metric(
-                    "Risk Level",
-                    level
-                )
-
-        except Exception as e:
-            st.error(f"Error: {e}")
-
+            st.metric("Risk Score", f"{risk}/100")
+            st.metric("Risk Level", level)
 
 # --------------------------
 # TAB 2 - PHOTO ANALYZER
@@ -165,38 +125,35 @@ with tab2:
     st.header("📸 Photo Analyzer")
 
     uploaded_file = st.file_uploader(
-        "Upload a GPS-tagged photo",
+        "Upload photo with GPS data",
         type=["jpg", "jpeg", "png"]
     )
 
-    def get_exif_data(image):
+    def get_exif(image):
 
         exif = {}
+        info = image._getexif()
 
-        try:
-            info = image._getexif()
-
-            if info:
-                for tag, value in info.items():
-                    decoded = TAGS.get(tag, tag)
-                    exif[decoded] = value
-        except:
-            pass
+        if info:
+            for tag, value in info.items():
+                exif[TAGS.get(tag, tag)] = value
 
         return exif
 
+
     def dms_to_decimal(dms, ref):
 
-        degrees = float(dms[0])
+        deg = float(dms[0])
         minutes = float(dms[1])
-        seconds = float(dms[2])
+        sec = float(dms[2])
 
-        decimal = degrees + minutes / 60 + seconds / 3600
+        dec = deg + minutes / 60 + sec / 3600
 
         if ref in ["S", "W"]:
-            decimal *= -1
+            dec *= -1
 
-        return decimal
+        return dec
+
 
     def analyze_vegetation(image):
 
@@ -206,160 +163,70 @@ with tab2:
         green = img[:, :, 1]
         blue = img[:, :, 2]
 
-        green_pixels = np.sum(
-            (green > red) &
-            (green > blue)
+        green_pixels = np.sum((green > red) & (green > blue))
+        brown_pixels = np.sum((red > green) & (green > blue))
+
+        total = img.shape[0] * img.shape[1]
+
+        return (
+            (green_pixels / total) * 100,
+            (brown_pixels / total) * 100
         )
 
-        brown_pixels = np.sum(
-            (red > green) &
-            (green > blue)
-        )
 
-        total_pixels = img.shape[0] * img.shape[1]
+    def vegetation_density(green):
 
-        green_percent = (
-            green_pixels / total_pixels
-        ) * 100
-
-        brown_percent = (
-            brown_pixels / total_pixels
-        ) * 100
-
-        return green_percent, brown_percent
-
-    def vegetation_density(green_percent):
-
-        if green_percent > 60:
+        if green > 60:
             return "Dense"
-
-        elif green_percent > 30:
+        elif green > 30:
             return "Moderate"
-
         else:
             return "Sparse"
 
+
     if uploaded_file:
 
-        try:
+        image = Image.open(uploaded_file)
+        st.image(image, use_container_width=True)
 
-            image = Image.open(uploaded_file)
+        exif = get_exif(image)
 
-            st.image(
-                image,
-                caption="Uploaded Photo",
-                use_container_width=True
-            )
+        if "GPSInfo" not in exif:
+            st.error("No GPS data found in image")
+        else:
 
-            exif = get_exif_data(image)
+            gps = exif["GPSInfo"]
 
-            if "GPSInfo" not in exif:
+            lat = dms_to_decimal(gps[2], gps[1])
+            lon = dms_to_decimal(gps[4], gps[3])
 
-                st.error(
-                    "No GPS location found in this image."
-                )
+            st.success("📍 GPS Location Extracted")
 
-            else:
+            st.write(f"Latitude: {lat:.6f}")
+            st.write(f"Longitude: {lon:.6f}")
 
-                gps = exif["GPSInfo"]
+            temp, humidity, wind = get_weather(lat, lon)
 
-                lat = dms_to_decimal(
-                    gps[2],
-                    gps[1]
-                )
+            green, brown = analyze_vegetation(image)
+            density = vegetation_density(green)
 
-                lon = dms_to_decimal(
-                    gps[4],
-                    gps[3]
-                )
+            risk = calculate_risk(temp, humidity, wind)
 
-                geolocator = Nominatim(
-                    user_agent="wildfire_detector",
-                    timeout=10
-                )
+            if brown > 20:
+                risk += 10
+            elif brown > 10:
+                risk += 5
 
-                location = geolocator.reverse(
-                    f"{lat}, {lon}"
-                )
+            risk = min(risk, 100)
+            level = risk_level(risk)
 
-                town_name = "Unknown"
+            st.write(f"🌿 Green: {green:.1f}%")
+            st.write(f"🍂 Dry: {brown:.1f}%")
+            st.write(f"🌳 Density: {density}")
 
-                if location:
+            st.write(f"🌡 Temp: {temp}°C")
+            st.write(f"💧 Humidity: {humidity}%")
+            st.write(f"💨 Wind: {wind} km/h")
 
-                    address = location.raw["address"]
-
-                    town_name = (
-                        address.get("city")
-                        or address.get("town")
-                        or address.get("village")
-                        or "Unknown"
-                    )
-
-                green_percent, brown_percent = (
-                    analyze_vegetation(image)
-                )
-
-                density = vegetation_density(
-                    green_percent
-                )
-
-                temp, humidity, wind = get_weather(
-                    lat,
-                    lon
-                )
-
-                risk = calculate_risk(
-                    temp,
-                    humidity,
-                    wind
-                )
-
-                if brown_percent > 20:
-                    risk += 10
-                elif brown_percent > 10:
-                    risk += 5
-
-                risk = min(risk, 100)
-
-                level = risk_level(risk)
-
-                st.success(
-                    f"📍 Photo taken near: {town_name}"
-                )
-
-                st.write(
-                    f"🌿 Green Vegetation: {green_percent:.1f}%"
-                )
-
-                st.write(
-                    f"🍂 Dry Vegetation: {brown_percent:.1f}%"
-                )
-
-                st.write(
-                    f"🌳 Vegetation Density: {density}"
-                )
-
-                st.write(
-                    f"🌡 Temperature: {temp}°C"
-                )
-
-                st.write(
-                    f"💧 Humidity: {humidity}%"
-                )
-
-                st.write(
-                    f"💨 Wind Speed: {wind} km/h"
-                )
-
-                st.metric(
-                    "Wildfire Risk Score",
-                    f"{risk:.1f}/100"
-                )
-
-                st.metric(
-                    "Risk Level",
-                    level
-                )
-
-        except Exception as e:
-            st.error(f"Error: {e}")
+            st.metric("Risk Score", f"{risk}/100")
+            st.metric("Risk Level", level)
