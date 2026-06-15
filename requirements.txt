@@ -1,4 +1,5 @@
 streamlit
 Pillow
+geopy
 requests
 numpy
