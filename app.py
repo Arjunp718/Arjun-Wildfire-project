@@ -54,7 +54,6 @@ def get_weather(lat, lon):
     )
 
     data = requests.get(url, timeout=15).json()
-
     current = data["current"]
 
     return (
@@ -71,14 +70,14 @@ with tab1:
 
     st.header("📍 Town Risk Checker")
 
-    town = st.text_input("Enter a Canadian town", "New Westminster")
+    town = st.text_input("Enter a Canadian town or city", "New Westminster")
 
     def get_coordinates(city):
 
         url = (
             "https://geocoding-api.open-meteo.com/v1/search"
             f"?name={city}"
-            "&count=1"
+            "&count=5"
             "&language=en"
             "&format=json"
             "&countryCode=CA"
@@ -89,29 +88,38 @@ with tab1:
         if "results" not in data:
             return None
 
-        r = data["results"][0]
+        results = data["results"]
 
-        return r["latitude"], r["longitude"], r["name"]
+        # Try to pick the most accurate match
+        best = results[0]
+
+        for r in results:
+            if r["name"].lower() == city.lower():
+                best = r
+                break
+
+        return best["latitude"], best["longitude"], best["name"]
 
     if st.button("Check Town Risk"):
 
         result = get_coordinates(town)
 
         if result is None:
-            st.error("Location not found")
+            st.error("Location not found in Canada.")
         else:
 
             lat, lon, name = result
+
             temp, humidity, wind = get_weather(lat, lon)
 
             risk = calculate_risk(temp, humidity, wind)
             level = risk_level(risk)
 
-            st.success(f"📍 {name}")
+            st.success(f"📍 Location: {name}")
 
-            st.write(f"🌡 Temp: {temp}°C")
+            st.write(f"🌡 Temperature: {temp}°C")
             st.write(f"💧 Humidity: {humidity}%")
-            st.write(f"💨 Wind: {wind} km/h")
+            st.write(f"💨 Wind Speed: {wind} km/h")
 
             st.metric("Risk Score", f"{risk}/100")
             st.metric("Risk Level", level)
@@ -132,11 +140,14 @@ with tab2:
     def get_exif(image):
 
         exif = {}
-        info = image._getexif()
 
-        if info:
-            for tag, value in info.items():
-                exif[TAGS.get(tag, tag)] = value
+        try:
+            info = image._getexif()
+            if info:
+                for tag, value in info.items():
+                    exif[TAGS.get(tag, tag)] = value
+        except:
+            pass
 
         return exif
 
@@ -168,10 +179,10 @@ with tab2:
 
         total = img.shape[0] * img.shape[1]
 
-        return (
-            (green_pixels / total) * 100,
-            (brown_pixels / total) * 100
-        )
+        green_percent = (green_pixels / total) * 100
+        brown_percent = (brown_pixels / total) * 100
+
+        return green_percent, brown_percent
 
 
     def vegetation_density(green):
@@ -192,7 +203,7 @@ with tab2:
         exif = get_exif(image)
 
         if "GPSInfo" not in exif:
-            st.error("No GPS data found in image")
+            st.error("No GPS data found in image.")
         else:
 
             gps = exif["GPSInfo"]
@@ -200,7 +211,7 @@ with tab2:
             lat = dms_to_decimal(gps[2], gps[1])
             lon = dms_to_decimal(gps[4], gps[3])
 
-            st.success("📍 GPS Location Extracted")
+            st.success("📍 GPS Location Found")
 
             st.write(f"Latitude: {lat:.6f}")
             st.write(f"Longitude: {lon:.6f}")
@@ -212,6 +223,7 @@ with tab2:
 
             risk = calculate_risk(temp, humidity, wind)
 
+            # vegetation adds extra risk
             if brown > 20:
                 risk += 10
             elif brown > 10:
