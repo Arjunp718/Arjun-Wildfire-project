@@ -68,13 +68,13 @@ def calculate_risk(temp, humidity, wind):
 
     score = 0
 
-    # Temperature contributes up to 50 points
-    score += min(temp, 40) / 40 * 50
+    # Temperature (35 points)
+    score += min(temp, 40) / 40 * 35
 
-    # Low humidity contributes up to 30 points
-    score += (100 - humidity) / 100 * 30
+    # Humidity (45 points)
+    score += (100 - humidity) / 100 * 45
 
-    # Wind contributes up to 20 points
+    # Wind (20 points)
     score += min(wind, 50) / 50 * 20
 
     return round(min(score, 100), 1)
@@ -102,12 +102,15 @@ if st.button("Check Wildfire Risk"):
             wind
         )
 
-        if risk >= 75:
+        if risk >= 85:
             level = "EXTREME"
-        elif risk >= 50:
+
+        elif risk >= 65:
             level = "HIGH"
-        elif risk >= 25:
+
+        elif risk >= 35:
             level = "MODERATE"
+
         else:
             level = "LOW"
 
@@ -116,13 +119,13 @@ if st.button("Check Wildfire Risk"):
         st.write(f"Latitude: {lat:.4f}")
         st.write(f"Longitude: {lon:.4f}")
 
-        st.subheader("Current Weather")
+        st.subheader("🌤 Current Weather")
 
         st.write(f"🌡 Temperature: {temp} °C")
         st.write(f"💧 Humidity: {humidity}%")
         st.write(f"💨 Wind Speed: {wind} km/h")
 
-        st.subheader("Wildfire Risk Assessment")
+        st.subheader("🔥 Wildfire Risk Assessment")
 
         st.metric(
             "Wildfire Risk Score",
@@ -135,23 +138,27 @@ if st.button("Check Wildfire Risk"):
         )
 
         if level == "LOW":
+
             st.success(
-                "Current wildfire conditions appear relatively safe."
+                "🟢 Low wildfire danger. Conditions are generally safe."
             )
 
         elif level == "MODERATE":
+
             st.warning(
-                "Some wildfire risk exists. Monitor conditions."
+                "🟡 Moderate wildfire danger. Dry conditions may allow fires to spread."
             )
 
         elif level == "HIGH":
+
             st.warning(
-                "Wildfire conditions are favorable. Extra caution advised."
+                "🟠 High wildfire danger. Fires could start and spread quickly."
             )
 
         else:
+
             st.error(
-                "Extreme wildfire conditions. High potential fire danger."
+                "🔴 Extreme wildfire danger. Very favorable conditions for wildfire growth."
             )
 
     except Exception as e:
