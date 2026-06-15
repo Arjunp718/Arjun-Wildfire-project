@@ -1,13 +1,46 @@
 import streamlit as st
-from geopy.geocoders import Nominatim
 import requests
 
+st.set_page_config(
+    page_title="Canada Wildfire Risk Checker",
+    page_icon="🔥"
+)
+
 st.title("🔥 Canada Wildfire Risk Checker")
+
+st.write(
+    "Enter any Canadian town or city to estimate wildfire risk using real weather data."
+)
 
 town = st.text_input(
     "Enter a Canadian town or city",
     "New Westminster"
 )
+
+def get_coordinates(city):
+
+    url = (
+        "https://geocoding-api.open-meteo.com/v1/search"
+        f"?name={city}"
+        "&count=1"
+        "&language=en"
+        "&format=json"
+        "&countryCode=CA"
+    )
+
+    response = requests.get(url, timeout=15)
+    data = response.json()
+
+    if "results" not in data:
+        return None
+
+    result = data["results"][0]
+
+    return (
+        result["latitude"],
+        result["longitude"],
+        result["name"]
+    )
 
 def get_weather(lat, lon):
 
@@ -20,7 +53,8 @@ def get_weather(lat, lon):
         f"wind_speed_10m"
     )
 
-    data = requests.get(url).json()
+    response = requests.get(url, timeout=15)
+    data = response.json()
 
     current = data["current"]
 
@@ -34,34 +68,28 @@ def calculate_risk(temp, humidity, wind):
 
     score = 0
 
+    # Temperature contributes up to 50 points
     score += min(temp, 40) / 40 * 50
 
+    # Low humidity contributes up to 30 points
     score += (100 - humidity) / 100 * 30
 
+    # Wind contributes up to 20 points
     score += min(wind, 50) / 50 * 20
 
     return round(min(score, 100), 1)
 
-if st.button("Check Risk"):
+if st.button("Check Wildfire Risk"):
 
     try:
 
-        geolocator = Nominatim(
-            user_agent="wildfire_checker",
-            timeout=10
-        )
+        result = get_coordinates(town)
 
-        location = geolocator.geocode(
-            f"{town}, Canada"
-        )
-
-        if location is None:
-
-            st.error("Location not found.")
+        if result is None:
+            st.error("Canadian location not found.")
             st.stop()
 
-        lat = location.latitude
-        lon = location.longitude
+        lat, lon, location_name = result
 
         temp, humidity, wind = get_weather(
             lat,
@@ -83,13 +111,18 @@ if st.button("Check Risk"):
         else:
             level = "LOW"
 
-        st.success(
-            f"📍 {town}"
-        )
+        st.success(f"📍 Location: {location_name}")
 
-        st.write(f"🌡 Temperature: {temp}°C")
+        st.write(f"Latitude: {lat:.4f}")
+        st.write(f"Longitude: {lon:.4f}")
+
+        st.subheader("Current Weather")
+
+        st.write(f"🌡 Temperature: {temp} °C")
         st.write(f"💧 Humidity: {humidity}%")
         st.write(f"💨 Wind Speed: {wind} km/h")
+
+        st.subheader("Wildfire Risk Assessment")
 
         st.metric(
             "Wildfire Risk Score",
@@ -101,8 +134,26 @@ if st.button("Check Risk"):
             level
         )
 
+        if level == "LOW":
+            st.success(
+                "Current wildfire conditions appear relatively safe."
+            )
+
+        elif level == "MODERATE":
+            st.warning(
+                "Some wildfire risk exists. Monitor conditions."
+            )
+
+        elif level == "HIGH":
+            st.warning(
+                "Wildfire conditions are favorable. Extra caution advised."
+            )
+
+        else:
+            st.error(
+                "Extreme wildfire conditions. High potential fire danger."
+            )
+
     except Exception as e:
 
-        st.error(
-            f"Error: {e}"
-        )
+        st.error(f"Error: {e}")
