@@ -4,7 +4,6 @@ import joblib
 
 # Load NASA FIRMS data
 data = pd.read_csv("fires_data.csv")
-
 # Remove rows with missing values
 data = data.dropna(subset=["brightness", "confidence", "frp"])
 
