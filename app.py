@@ -5,11 +5,11 @@ from PIL import Image
 from PIL.ExifTags import TAGS
 
 st.set_page_config(
-    page_title="🔥 Canada Wildfire Risk System",
+    page_title="🔥 Wildfire Risk System",
     page_icon="🔥"
 )
 
-st.title("🔥 Canada Wildfire Risk System (Explainable AI)")
+st.title("🔥 Wildfire Risk System ")
 
 st.write("Upload a GPS-enabled photo. The system analyzes weather + image data to estimate wildfire risk.")
 
