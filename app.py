@@ -1,228 +1,161 @@
 import streamlit as st
-import requests
 import numpy as np
+import requests
 from PIL import Image
-from PIL.ExifTags import TAGS
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import train_test_split
 
-st.set_page_config(
-    page_title="🔥 Wildfire Risk System",
-    page_icon="🔥"
-)
+st.set_page_config(page_title="🔥 Wildfire AI Model", page_icon="🔥")
 
-st.title("🔥 Wildfire Risk System")
+st.title("🔥 Wildfire Risk AI System (ML + Satellite Style)")
 
-st.write("Upload a GPS photo. The system estimates wildfire risk using AI-style scoring + NDVI vegetation analysis.")
+st.write("AI model using weather + vegetation index to estimate wildfire probability.")
 
 # -------------------------
 # WEATHER
 # -------------------------
 
 def get_weather(lat, lon):
-
     url = (
         f"https://api.open-meteo.com/v1/forecast"
-        f"?latitude={lat}"
-        f"&longitude={lon}"
-        f"&current=temperature_2m,"
-        f"relative_humidity_2m,"
-        f"wind_speed_10m"
+        f"?latitude={lat}&longitude={lon}"
+        f"&current=temperature_2m,relative_humidity_2m,wind_speed_10m"
     )
 
-    data = requests.get(url, timeout=15).json()
-    c = data["current"]
+    data = requests.get(url).json()["current"]
 
-    return c["temperature_2m"], c["relative_humidity_2m"], c["wind_speed_10m"]
-
-# -------------------------
-# GPS EXTRACTION
-# -------------------------
-
-def get_exif(image):
-
-    exif = {}
-
-    try:
-        info = image._getexif()
-        if info:
-            for tag, value in info.items():
-                exif[TAGS.get(tag, tag)] = value
-    except:
-        pass
-
-    return exif
-
-
-def dms_to_decimal(dms, ref):
-
-    deg = float(dms[0])
-    minutes = float(dms[1])
-    sec = float(dms[2])
-
-    dec = deg + minutes / 60 + sec / 3600
-
-    if ref in ["S", "W"]:
-        dec *= -1
-
-    return dec
+    return (
+        data["temperature_2m"],
+        data["relative_humidity_2m"],
+        data["wind_speed_10m"]
+    )
 
 # -------------------------
-# NDVI-LIKE VEGETATION INDEX
+# IMAGE → VEGETATION INDEX (NDVI-STYLE)
 # -------------------------
-# (Simulated NDVI using RGB since true NIR not available)
 
-def compute_ndvi(image):
+def vegetation_index(image):
 
     img = np.array(image.convert("RGB")).astype(float)
 
     red = img[:, :, 0]
     green = img[:, :, 1]
-    blue = img[:, :, 2]
 
-    # fake NIR approximation (common hack in basic CV projects)
-    nir = (green + red) / 2
+    # NDVI-like approximation (no NIR available)
+    vi = (green - red) / (green + red + 1e-6)
 
-    ndvi = (nir - red) / (nir + red + 1e-6)
-
-    return np.mean(ndvi)
+    return np.mean(vi)
 
 # -------------------------
-# IMAGE FEATURES
+# TRAIN SYNTHETIC MODEL (SCALABLE BASELINE)
 # -------------------------
 
-def analyze_image(image):
+@st.cache_resource
+def train_model():
 
-    img = np.array(image.convert("RGB"))
+    np.random.seed(42)
 
-    red = img[:, :, 0]
-    green = img[:, :, 1]
+    # synthetic dataset (replace later with NASA FIRMS + NDVI)
+    n = 3000
 
-    total = img.shape[0] * img.shape[1]
+    temp = np.random.uniform(5, 40, n)
+    humidity = np.random.uniform(10, 100, n)
+    wind = np.random.uniform(0, 50, n)
+    vi = np.random.uniform(-0.5, 0.8, n)
 
-    green_percent = np.sum((green > red)) / total * 100
-    brown_percent = np.sum((red > green)) / total * 100
+    # fire probability logic (training ground truth)
+    prob = (
+        (temp / 40) * 0.3 +
+        ((100 - humidity) / 100) * 0.3 +
+        (wind / 50) * 0.2 +
+        ((1 - vi)) * 0.2
+    )
 
-    return green_percent, brown_percent
+    y = (prob > 0.55).astype(int)
+
+    X = np.column_stack([temp, humidity, wind, vi])
+
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2)
+
+    model = RandomForestClassifier(
+        n_estimators=150,
+        max_depth=8,
+        random_state=42
+    )
+
+    model.fit(X_train, y_train)
+
+    return model
+
+model = train_model()
 
 # -------------------------
-# LOGISTIC STYLE AI MODEL
+# INPUT
 # -------------------------
 
-def sigmoid(x):
-    return 1 / (1 + np.exp(-x))
+uploaded_file = st.file_uploader("📸 Upload Image", type=["jpg", "jpeg", "png"])
 
-# -------------------------
-# UPLOAD
-# -------------------------
-
-uploaded_file = st.file_uploader(
-    "📸 Upload GPS Photo",
-    type=["jpg", "jpeg", "png"]
-)
+lat = st.number_input("Latitude", value=49.2)
+lon = st.number_input("Longitude", value=-122.9)
 
 if uploaded_file:
 
     image = Image.open(uploaded_file)
     st.image(image, use_container_width=True)
 
-    exif = get_exif(image)
-
-    if "GPSInfo" not in exif:
-        st.error("No GPS data found in image.")
-        st.stop()
-
-    gps = exif["GPSInfo"]
-
-    lat = dms_to_decimal(gps[2], gps[1])
-    lon = dms_to_decimal(gps[4], gps[3])
-
-    st.success("📍 GPS Extracted")
-
-    st.write(f"Latitude: {lat:.6f}")
-    st.write(f"Longitude: {lon:.6f}")
-
     # -------------------------
-    # WEATHER
+    # FEATURES
     # -------------------------
 
     temp, humidity, wind = get_weather(lat, lon)
+    vi = vegetation_index(image)
+
+    features = np.array([[temp, humidity, wind, vi]])
 
     # -------------------------
-    # IMAGE ANALYSIS
+    # PREDICTION (REAL ML PROBABILITY)
     # -------------------------
 
-    green, brown = analyze_image(image)
-    ndvi = compute_ndvi(image)
+    prob = model.predict_proba(features)[0][1] * 100
+
+    pred = model.predict(features)[0]
 
     # -------------------------
-    # FEATURE SCORING (AI STYLE)
+    # EXPLANATION (IMPORTANCE STYLE)
     # -------------------------
 
-    # normalize inputs
-    t = temp / 40
-    h = (100 - humidity) / 100
-    w = wind / 50
-    g = green / 100
-    b = brown / 100
-    n = (1 - ndvi)
+    st.subheader("📊 Inputs")
 
-    # weighted model (learned-style weights)
-    raw_score = (
-        1.5 * t +
-        2.0 * h +
-        1.2 * w +
-        1.8 * b +
-        1.5 * n -
-        1.2 * g
-    )
-
-    risk_prob = sigmoid(raw_score) * 100
-
-    # -------------------------
-    # BREAKDOWN
-    # -------------------------
-
-    breakdown = {
-        "🌡 Temperature": t * 30,
-        "💧 Dryness": h * 35,
-        "💨 Wind": w * 20,
-        "🍂 Dry Vegetation": b * 25,
-        "🛰 NDVI Dryness": n * 30,
-        "🌿 Green Reduction": -g * 20
-    }
-
-    # final clamp
-    risk = max(0, min(risk_prob, 100))
-
-    # -------------------------
-    # OUTPUT
-    # -------------------------
-
-    st.subheader("🧠 AI Model Breakdown (Explainable ML-style)")
-
-    st.write("### 🌿 Inputs")
-    st.write(f"🌡 Temperature: {temp}°C")
-    st.write(f"💧 Humidity: {humidity}%")
-    st.write(f"💨 Wind: {wind} km/h")
-    st.write(f"🌿 Green: {green:.1f}%")
-    st.write(f"🍂 Dry: {brown:.1f}%")
-    st.write(f"🛰 NDVI Index: {ndvi:.3f}")
+    st.write(f"🌡 Temperature: {temp:.1f}°C")
+    st.write(f"💧 Humidity: {humidity:.1f}%")
+    st.write(f"💨 Wind: {wind:.1f} km/h")
+    st.write(f"🌿 Vegetation Index: {vi:.3f}")
 
     st.markdown("---")
 
-    st.write("### 📊 Feature Contributions")
+    st.subheader("🤖 AI Prediction")
 
-    for k, v in breakdown.items():
-        st.write(f"{k}: {v:.2f}")
+    st.metric("🔥 Fire Probability", f"{prob:.1f}%")
 
-    st.markdown("---")
-
-    st.metric("🔥 Fire Probability", f"{risk:.1f}%")
-
-    if risk > 75:
-        st.error("🔥 EXTREME FIRE RISK")
-    elif risk > 50:
-        st.warning("⚠️ HIGH FIRE RISK")
-    elif risk > 25:
-        st.info("🟡 MODERATE RISK")
+    if prob > 70:
+        st.error("🔥 HIGH FIRE RISK")
+    elif prob > 40:
+        st.warning("⚠️ MODERATE RISK")
     else:
         st.success("✅ LOW RISK")
+
+    # -------------------------
+    # FEATURE CONTRIBUTION (EXPLAINABILITY)
+    # -------------------------
+
+    st.subheader("🧠 What the model is using")
+
+    st.write("🌡 Higher temperature → increases risk")
+    st.write("💧 Lower humidity → increases dryness risk")
+    st.write("💨 Higher wind → spreads fire faster")
+    st.write("🌿 Lower vegetation index → drier land")
+
+    st.markdown("---")
+
+    st.write("⚙️ Model Type: Random Forest Classifier")
+    st.write("📈 Output: probability via predict_proba()")
