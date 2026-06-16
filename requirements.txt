@@ -1,6 +1,5 @@
 streamlit
-requests
 numpy
+requests
 Pillow
-torch
-transformers
+scikit-learn
