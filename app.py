@@ -2,160 +2,95 @@ import streamlit as st
 import numpy as np
 import requests
 from PIL import Image
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.model_selection import train_test_split
+import joblib
 
-st.set_page_config(page_title="🔥 Wildfire AI Model", page_icon="🔥")
+st.set_page_config(page_title="🔥 Wildfire AI (NASA Level 2)", page_icon="🔥")
 
-st.title("🔥 Wildfire Risk AI System (ML + Satellite Style)")
+st.title("🔥 Wildfire Risk AI (NASA Level 2 Model)")
 
-st.write("AI model using weather + vegetation index to estimate wildfire probability.")
+# -------------------------
+# LOAD MODEL
+# -------------------------
+
+model = joblib.load("fire_model.pkl")
 
 # -------------------------
 # WEATHER
 # -------------------------
 
 def get_weather(lat, lon):
+
     url = (
         f"https://api.open-meteo.com/v1/forecast"
         f"?latitude={lat}&longitude={lon}"
         f"&current=temperature_2m,relative_humidity_2m,wind_speed_10m"
     )
 
-    data = requests.get(url).json()["current"]
+    c = requests.get(url).json()["current"]
 
-    return (
-        data["temperature_2m"],
-        data["relative_humidity_2m"],
-        data["wind_speed_10m"]
-    )
+    return c["temperature_2m"], c["relative_humidity_2m"], c["wind_speed_10m"]
 
 # -------------------------
-# IMAGE → VEGETATION INDEX (NDVI-STYLE)
+# NDVI (image-based vegetation)
 # -------------------------
 
-def vegetation_index(image):
+def ndvi(image):
 
     img = np.array(image.convert("RGB")).astype(float)
 
     red = img[:, :, 0]
     green = img[:, :, 1]
 
-    # NDVI-like approximation (no NIR available)
-    vi = (green - red) / (green + red + 1e-6)
+    nir = (green + red) / 2
 
-    return np.mean(vi)
-
-# -------------------------
-# TRAIN SYNTHETIC MODEL (SCALABLE BASELINE)
-# -------------------------
-
-@st.cache_resource
-def train_model():
-
-    np.random.seed(42)
-
-    # synthetic dataset (replace later with NASA FIRMS + NDVI)
-    n = 3000
-
-    temp = np.random.uniform(5, 40, n)
-    humidity = np.random.uniform(10, 100, n)
-    wind = np.random.uniform(0, 50, n)
-    vi = np.random.uniform(-0.5, 0.8, n)
-
-    # fire probability logic (training ground truth)
-    prob = (
-        (temp / 40) * 0.3 +
-        ((100 - humidity) / 100) * 0.3 +
-        (wind / 50) * 0.2 +
-        ((1 - vi)) * 0.2
-    )
-
-    y = (prob > 0.55).astype(int)
-
-    X = np.column_stack([temp, humidity, wind, vi])
-
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2)
-
-    model = RandomForestClassifier(
-        n_estimators=150,
-        max_depth=8,
-        random_state=42
-    )
-
-    model.fit(X_train, y_train)
-
-    return model
-
-model = train_model()
+    return np.mean((nir - red) / (nir + red + 1e-6))
 
 # -------------------------
 # INPUT
 # -------------------------
 
-uploaded_file = st.file_uploader("📸 Upload Image", type=["jpg", "jpeg", "png"])
+uploaded = st.file_uploader("📸 Upload image", type=["jpg", "png"])
 
 lat = st.number_input("Latitude", value=49.2)
 lon = st.number_input("Longitude", value=-122.9)
 
-if uploaded_file:
+if uploaded:
 
-    image = Image.open(uploaded_file)
-    st.image(image, use_container_width=True)
+    img = Image.open(uploaded)
+    st.image(img, use_container_width=True)
 
     # -------------------------
     # FEATURES
     # -------------------------
 
     temp, humidity, wind = get_weather(lat, lon)
-    vi = vegetation_index(image)
+    vi = ndvi(img)
 
-    features = np.array([[temp, humidity, wind, vi]])
-
-    # -------------------------
-    # PREDICTION (REAL ML PROBABILITY)
-    # -------------------------
-
-    prob = model.predict_proba(features)[0][1] * 100
-
-    pred = model.predict(features)[0]
+    X = np.array([[temp, humidity, wind, vi]])
 
     # -------------------------
-    # EXPLANATION (IMPORTANCE STYLE)
+    # REAL ML PREDICTION
     # -------------------------
 
-    st.subheader("📊 Inputs")
+    prob = model.predict_proba(X)[0][1] * 100
 
-    st.write(f"🌡 Temperature: {temp:.1f}°C")
-    st.write(f"💧 Humidity: {humidity:.1f}%")
-    st.write(f"💨 Wind: {wind:.1f} km/h")
-    st.write(f"🌿 Vegetation Index: {vi:.3f}")
+    st.subheader("🔥 Prediction")
 
-    st.markdown("---")
+    st.metric("Fire Probability", f"{prob:.1f}%")
 
-    st.subheader("🤖 AI Prediction")
+    # -------------------------
+    # EXPLANATION
+    # -------------------------
 
-    st.metric("🔥 Fire Probability", f"{prob:.1f}%")
+    st.write("### Inputs")
+    st.write(f"🌡 Temp: {temp}")
+    st.write(f"💧 Humidity: {humidity}")
+    st.write(f"💨 Wind: {wind}")
+    st.write(f"🌿 NDVI: {vi:.3f}")
 
-    if prob > 70:
-        st.error("🔥 HIGH FIRE RISK")
-    elif prob > 40:
-        st.warning("⚠️ MODERATE RISK")
+    if prob > 75:
+        st.error("🔥 Extreme Risk")
+    elif prob > 50:
+        st.warning("⚠️ High Risk")
     else:
-        st.success("✅ LOW RISK")
-
-    # -------------------------
-    # FEATURE CONTRIBUTION (EXPLAINABILITY)
-    # -------------------------
-
-    st.subheader("🧠 What the model is using")
-
-    st.write("🌡 Higher temperature → increases risk")
-    st.write("💧 Lower humidity → increases dryness risk")
-    st.write("💨 Higher wind → spreads fire faster")
-    st.write("🌿 Lower vegetation index → drier land")
-
-    st.markdown("---")
-
-    st.write("⚙️ Model Type: Random Forest Classifier")
-    st.write("📈 Output: probability via predict_proba()")
+        st.success("✅ Low Risk")
