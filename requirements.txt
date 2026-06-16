@@ -3,3 +3,5 @@ numpy
 requests
 Pillow
 scikit-learn
+joblib
+pandas
