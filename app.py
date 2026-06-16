@@ -9,9 +9,9 @@ st.set_page_config(
     page_icon="🔥"
 )
 
-st.title("🔥 Wildfire Risk System ")
+st.title("🔥 Wildfire Risk System")
 
-st.write("Upload a GPS-enabled photo. The system analyzes weather + image data to estimate wildfire risk.")
+st.write("Upload a GPS photo. The system estimates wildfire risk using AI-style scoring + NDVI vegetation analysis.")
 
 # -------------------------
 # WEATHER
@@ -34,7 +34,7 @@ def get_weather(lat, lon):
     return c["temperature_2m"], c["relative_humidity_2m"], c["wind_speed_10m"]
 
 # -------------------------
-# IMAGE GPS EXTRACTION
+# GPS EXTRACTION
 # -------------------------
 
 def get_exif(image):
@@ -66,7 +66,27 @@ def dms_to_decimal(dms, ref):
     return dec
 
 # -------------------------
-# IMAGE ANALYSIS
+# NDVI-LIKE VEGETATION INDEX
+# -------------------------
+# (Simulated NDVI using RGB since true NIR not available)
+
+def compute_ndvi(image):
+
+    img = np.array(image.convert("RGB")).astype(float)
+
+    red = img[:, :, 0]
+    green = img[:, :, 1]
+    blue = img[:, :, 2]
+
+    # fake NIR approximation (common hack in basic CV projects)
+    nir = (green + red) / 2
+
+    ndvi = (nir - red) / (nir + red + 1e-6)
+
+    return np.mean(ndvi)
+
+# -------------------------
+# IMAGE FEATURES
 # -------------------------
 
 def analyze_image(image):
@@ -75,14 +95,20 @@ def analyze_image(image):
 
     red = img[:, :, 0]
     green = img[:, :, 1]
-    blue = img[:, :, 2]
 
     total = img.shape[0] * img.shape[1]
 
-    green_percent = np.sum((green > red) & (green > blue)) / total * 100
-    brown_percent = np.sum((red > green) & (green > blue)) / total * 100
+    green_percent = np.sum((green > red)) / total * 100
+    brown_percent = np.sum((red > green)) / total * 100
 
     return green_percent, brown_percent
+
+# -------------------------
+# LOGISTIC STYLE AI MODEL
+# -------------------------
+
+def sigmoid(x):
+    return 1 / (1 + np.exp(-x))
 
 # -------------------------
 # UPLOAD
@@ -101,7 +127,7 @@ if uploaded_file:
     exif = get_exif(image)
 
     if "GPSInfo" not in exif:
-        st.error("❌ No GPS data found in image.")
+        st.error("No GPS data found in image.")
         st.stop()
 
     gps = exif["GPSInfo"]
@@ -121,79 +147,82 @@ if uploaded_file:
     temp, humidity, wind = get_weather(lat, lon)
 
     # -------------------------
-    # IMAGE FEATURES
+    # IMAGE ANALYSIS
     # -------------------------
 
     green, brown = analyze_image(image)
+    ndvi = compute_ndvi(image)
 
     # -------------------------
-    # FACTOR MODEL
+    # FEATURE SCORING (AI STYLE)
     # -------------------------
 
-    factors = {}
+    # normalize inputs
+    t = temp / 40
+    h = (100 - humidity) / 100
+    w = wind / 50
+    g = green / 100
+    b = brown / 100
+    n = (1 - ndvi)
 
-    # 🌡 Temperature
-    factors["Temperature"] = min(temp, 40) / 40 * 30
+    # weighted model (learned-style weights)
+    raw_score = (
+        1.5 * t +
+        2.0 * h +
+        1.2 * w +
+        1.8 * b +
+        1.5 * n -
+        1.2 * g
+    )
 
-    # 💧 Dryness
-    factors["Dryness"] = (100 - humidity) / 100 * 35
-
-    # 💨 Wind
-    factors["Wind"] = min(wind, 50) / 50 * 20
-
-    # 🌿 Green reduces risk
-    factors["Green Cover"] = -(green / 100) * 20
-
-    # 🍂 Dry vegetation increases risk
-    factors["Dry Vegetation"] = (brown / 100) * 25
-
-    # 🌳 density adjustment
-    if green > 60:
-        factors["Density"] = -10
-    elif green < 30:
-        factors["Density"] = 10
-    else:
-        factors["Density"] = 0
+    risk_prob = sigmoid(raw_score) * 100
 
     # -------------------------
-    # FINAL RISK
+    # BREAKDOWN
     # -------------------------
 
-    risk = sum(factors.values())
-    risk = max(0, min(risk, 100))
+    breakdown = {
+        "🌡 Temperature": t * 30,
+        "💧 Dryness": h * 35,
+        "💨 Wind": w * 20,
+        "🍂 Dry Vegetation": b * 25,
+        "🛰 NDVI Dryness": n * 30,
+        "🌿 Green Reduction": -g * 20
+    }
+
+    # final clamp
+    risk = max(0, min(risk_prob, 100))
 
     # -------------------------
     # OUTPUT
     # -------------------------
 
-    st.subheader("📊 Wildfire Risk Breakdown (Explainable AI)")
+    st.subheader("🧠 AI Model Breakdown (Explainable ML-style)")
 
-    st.write("### 🌿 Image + Weather Inputs")
+    st.write("### 🌿 Inputs")
     st.write(f"🌡 Temperature: {temp}°C")
     st.write(f"💧 Humidity: {humidity}%")
     st.write(f"💨 Wind: {wind} km/h")
-    st.write(f"🌿 Green Vegetation: {green:.1f}%")
-    st.write(f"🍂 Dry Vegetation: {brown:.1f}%")
+    st.write(f"🌿 Green: {green:.1f}%")
+    st.write(f"🍂 Dry: {brown:.1f}%")
+    st.write(f"🛰 NDVI Index: {ndvi:.3f}")
 
     st.markdown("---")
 
-    st.write("### 🧠 Factor Contributions")
+    st.write("### 📊 Feature Contributions")
 
-    for k, v in factors.items():
-        if v >= 0:
-            st.write(f"{k}: +{v:.1f}")
-        else:
-            st.write(f"{k}: {v:.1f}")
+    for k, v in breakdown.items():
+        st.write(f"{k}: {v:.2f}")
 
     st.markdown("---")
 
-    st.metric("🔥 Final Wildfire Risk Score", f"{risk:.1f}/100")
+    st.metric("🔥 Fire Probability", f"{risk:.1f}%")
 
-    if risk >= 75:
+    if risk > 75:
         st.error("🔥 EXTREME FIRE RISK")
-    elif risk >= 50:
+    elif risk > 50:
         st.warning("⚠️ HIGH FIRE RISK")
-    elif risk >= 25:
+    elif risk > 25:
         st.info("🟡 MODERATE RISK")
     else:
         st.success("✅ LOW RISK")
