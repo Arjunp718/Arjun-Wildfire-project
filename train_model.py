@@ -5,13 +5,13 @@ import joblib
 # Load NASA FIRMS data
 data = pd.read_csv("fires_data.csv")
 
-# Keep rows with required values
+# Remove rows with missing values
 data = data.dropna(subset=["brightness", "confidence", "frp"])
 
 # Features
 X = data[["brightness", "confidence", "frp"]]
 
-# Create a wildfire intensity score
+# Target wildfire intensity score
 y = (
     data["brightness"] * 0.5 +
     data["confidence"] * 0.2 +
@@ -29,4 +29,4 @@ model.fit(X, y)
 # Save model
 joblib.dump(model, "fire_model.pkl")
 
-print("✅ Model trained and saved as fire_model.pkl")
+print("Model trained and saved!")
