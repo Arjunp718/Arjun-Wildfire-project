@@ -2,243 +2,141 @@ import streamlit as st
 import requests
 import numpy as np
 from PIL import Image
-from PIL.ExifTags import TAGS
+
+import torch
+from transformers import CLIPProcessor, CLIPModel
 
 st.set_page_config(
-    page_title="Canada Wildfire Risk System",
+    page_title="🔥 AI Wildfire Predictor (CLIP)",
     page_icon="🔥"
 )
 
-st.title("🔥 Canada Wildfire Risk System")
+st.title("🔥 AI Wildfire Risk Predictor (CLIP + Weather + Satellite)")
 
-tab1, tab2 = st.tabs([
-    "📍 Town Risk Checker",
-    "📸 Photo Analyzer"
-])
+# -------------------------
+# LOAD CLIP MODEL (AI)
+# -------------------------
 
-# --------------------------
-# COMMON FUNCTIONS
-# --------------------------
+@st.cache_resource
+def load_model():
 
-def calculate_risk(temp, humidity, wind):
+    model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
+    processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
 
-    score = 0
-    score += min(temp, 40) / 40 * 35
-    score += (100 - humidity) / 100 * 45
-    score += min(wind, 50) / 50 * 20
-
-    return round(min(score, 100), 1)
+    return model, processor
 
 
-def risk_level(score):
+model, processor = load_model()
 
-    if score >= 85:
+# -------------------------
+# WEATHER
+# -------------------------
+
+def get_weather(lat, lon):
+
+    url = (
+        f"https://api.open-meteo.com/v1/forecast"
+        f"?latitude={lat}&longitude={lon}"
+        f"&current=temperature_2m,relative_humidity_2m,wind_speed_10m"
+    )
+
+    data = requests.get(url, timeout=15).json()
+    c = data["current"]
+
+    return c["temperature_2m"], c["relative_humidity_2m"], c["wind_speed_10m"]
+
+# -------------------------
+# CLIP FIRE SCORE
+# -------------------------
+
+def clip_fire_score(image):
+
+    labels = [
+        "a forest fire burning",
+        "a high wildfire risk dry forest",
+        "a green safe forest",
+        "a wet area with water and vegetation",
+        "a dry drought landscape"
+    ]
+
+    inputs = processor(
+        text=labels,
+        images=image,
+        return_tensors="pt",
+        padding=True
+    )
+
+    with torch.no_grad():
+        outputs = model(**inputs)
+
+        logits = outputs.logits_per_image
+        probs = logits.softmax(dim=1)[0]
+
+    risk_keywords = probs[0] + probs[1] + probs[4]  # fire + dry + drought
+    safe_keywords = probs[2] + probs[3]
+
+    score = float(risk_keywords / (risk_keywords + safe_keywords)) * 100
+
+    return round(score, 2)
+
+# -------------------------
+# FINAL RISK MODEL
+# -------------------------
+
+def final_risk(clip_score, temp, humidity, wind):
+
+    score = clip_score * 0.6
+    score += min(temp, 40) * 0.4
+    score += (100 - humidity) * 0.5
+    score += min(wind, 50) * 0.3
+
+    score = score / 2.0
+
+    return min(round(score, 1), 100)
+
+def level(score):
+
+    if score >= 80:
         return "EXTREME"
-    elif score >= 65:
+    elif score >= 60:
         return "HIGH"
     elif score >= 35:
         return "MODERATE"
     else:
         return "LOW"
 
+# -------------------------
+# UI
+# -------------------------
 
-def get_weather(lat, lon):
+uploaded_file = st.file_uploader(
+    "Upload Satellite / Forest Image",
+    type=["jpg", "jpeg", "png"]
+)
 
-    url = (
-        f"https://api.open-meteo.com/v1/forecast"
-        f"?latitude={lat}"
-        f"&longitude={lon}"
-        f"&current=temperature_2m,"
-        f"relative_humidity_2m,"
-        f"wind_speed_10m"
-    )
+lat = st.number_input("Latitude", value=49.0)
+lon = st.number_input("Longitude", value=-122.0)
 
-    data = requests.get(url, timeout=15).json()
-    current = data["current"]
+if uploaded_file:
 
-    return (
-        current["temperature_2m"],
-        current["relative_humidity_2m"],
-        current["wind_speed_10m"]
-    )
+    image = Image.open(uploaded_file)
+    st.image(image, use_container_width=True)
 
-# --------------------------
-# TAB 1 - TOWN CHECKER
-# --------------------------
+    st.info("Running AI (CLIP model)...")
 
-with tab1:
+    clip_score = clip_fire_score(image)
 
-    st.header("📍 Town Risk Checker")
+    temp, humidity, wind = get_weather(lat, lon)
 
-    town = st.text_input("Enter a Canadian town or city", "New Westminster")
+    risk = final_risk(clip_score, temp, humidity, wind)
+    risk_level = level(risk)
 
-    def get_coordinates(city):
+    st.subheader("🔥 AI Results")
 
-        url = (
-            "https://geocoding-api.open-meteo.com/v1/search"
-            f"?name={city}"
-            "&count=5"
-            "&language=en"
-            "&format=json"
-            "&countryCode=CA"
-        )
+    st.write(f"🤖 CLIP Fire Score: {clip_score}/100")
+    st.write(f"🌡 Temp: {temp}°C")
+    st.write(f"💧 Humidity: {humidity}%")
+    st.write(f"💨 Wind: {wind} km/h")
 
-        data = requests.get(url, timeout=15).json()
-
-        if "results" not in data:
-            return None
-
-        results = data["results"]
-
-        # Try to pick the most accurate match
-        best = results[0]
-
-        for r in results:
-            if r["name"].lower() == city.lower():
-                best = r
-                break
-
-        return best["latitude"], best["longitude"], best["name"]
-
-    if st.button("Check Town Risk"):
-
-        result = get_coordinates(town)
-
-        if result is None:
-            st.error("Location not found in Canada.")
-        else:
-
-            lat, lon, name = result
-
-            temp, humidity, wind = get_weather(lat, lon)
-
-            risk = calculate_risk(temp, humidity, wind)
-            level = risk_level(risk)
-
-            st.success(f"📍 Location: {name}")
-
-            st.write(f"🌡 Temperature: {temp}°C")
-            st.write(f"💧 Humidity: {humidity}%")
-            st.write(f"💨 Wind Speed: {wind} km/h")
-
-            st.metric("Risk Score", f"{risk}/100")
-            st.metric("Risk Level", level)
-
-# --------------------------
-# TAB 2 - PHOTO ANALYZER
-# --------------------------
-
-with tab2:
-
-    st.header("📸 Photo Analyzer")
-
-    uploaded_file = st.file_uploader(
-        "Upload photo with GPS data",
-        type=["jpg", "jpeg", "png"]
-    )
-
-    def get_exif(image):
-
-        exif = {}
-
-        try:
-            info = image._getexif()
-            if info:
-                for tag, value in info.items():
-                    exif[TAGS.get(tag, tag)] = value
-        except:
-            pass
-
-        return exif
-
-
-    def dms_to_decimal(dms, ref):
-
-        deg = float(dms[0])
-        minutes = float(dms[1])
-        sec = float(dms[2])
-
-        dec = deg + minutes / 60 + sec / 3600
-
-        if ref in ["S", "W"]:
-            dec *= -1
-
-        return dec
-
-
-    def analyze_vegetation(image):
-
-        img = np.array(image.convert("RGB"))
-
-        red = img[:, :, 0]
-        green = img[:, :, 1]
-        blue = img[:, :, 2]
-
-        green_pixels = np.sum((green > red) & (green > blue))
-        brown_pixels = np.sum((red > green) & (green > blue))
-
-        total = img.shape[0] * img.shape[1]
-
-        green_percent = (green_pixels / total) * 100
-        brown_percent = (brown_pixels / total) * 100
-
-        return green_percent, brown_percent
-
-
-    def vegetation_density(green):
-
-        if green > 60:
-            return "Dense"
-        elif green > 30:
-            return "Moderate"
-        else:
-            return "Sparse"
-
-
-    if uploaded_file:
-
-        image = Image.open(uploaded_file)
-        st.image(image, use_container_width=True)
-
-        exif = get_exif(image)
-
-        if "GPSInfo" not in exif:
-            st.error("No GPS data found in image.")
-        else:
-
-            gps = exif["GPSInfo"]
-
-            lat = dms_to_decimal(gps[2], gps[1])
-            lon = dms_to_decimal(gps[4], gps[3])
-
-            st.success("📍 GPS Location Found")
-
-            st.write(f"Latitude: {lat:.6f}")
-            st.write(f"Longitude: {lon:.6f}")
-
-            temp, humidity, wind = get_weather(lat, lon)
-
-            green, brown = analyze_vegetation(image)
-            density = vegetation_density(green)
-
-            risk = calculate_risk(temp, humidity, wind)
-
-            # vegetation adds extra risk
-            if brown > 20:
-                risk += 10
-            elif brown > 10:
-                risk += 5
-
-            risk = min(risk, 100)
-            level = risk_level(risk)
-
-            st.write(f"🌿 Green: {green:.1f}%")
-            st.write(f"🍂 Dry: {brown:.1f}%")
-            st.write(f"🌳 Density: {density}")
-
-            st.write(f"🌡 Temp: {temp}°C")
-            st.write(f"💧 Humidity: {humidity}%")
-            st.write(f"💨 Wind: {wind} km/h")
-
-            st.metric("Risk Score", f"{risk}/100")
-            st.metric("Risk Level", level)
+    st.metric("🔥 Final Wildfire Risk", f"{risk}/100")
+    st.metric("Risk Level", risk_level)
