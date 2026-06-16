@@ -1,117 +1,199 @@
 import streamlit as st
+import requests
+import numpy as np
 from PIL import Image
-import torch
-from transformers import CLIPProcessor, CLIPModel
+from PIL.ExifTags import TAGS
 
 st.set_page_config(
-    page_title="🔥 AI Wildfire Vision System",
+    page_title="🔥 Canada Wildfire Risk System",
     page_icon="🔥"
 )
 
-st.title("🔥 AI Wildfire Vision System (CLIP Image AI)")
+st.title("🔥 Canada Wildfire Risk System (Explainable AI)")
 
-st.write("Upload an image and the AI will analyze wildfire risk from visual patterns.")
-
-# -------------------------
-# LOAD AI MODEL
-# -------------------------
-
-@st.cache_resource
-def load_model():
-    model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
-    processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
-    return model, processor
-
-model, processor = load_model()
+st.write("Upload a GPS-enabled photo. The system analyzes weather + image data to estimate wildfire risk.")
 
 # -------------------------
-# AI FUNCTION
+# WEATHER
 # -------------------------
 
-def clip_fire_score(image):
+def get_weather(lat, lon):
 
-    labels = [
-        "a forest fire burning",
-        "a dry forest with wildfire risk",
-        "a healthy green forest",
-        "a wet forest with water",
-        "a drought damaged landscape"
-    ]
-
-    inputs = processor(
-        text=labels,
-        images=image,
-        return_tensors="pt",
-        padding=True
+    url = (
+        f"https://api.open-meteo.com/v1/forecast"
+        f"?latitude={lat}"
+        f"&longitude={lon}"
+        f"&current=temperature_2m,"
+        f"relative_humidity_2m,"
+        f"wind_speed_10m"
     )
 
-    with torch.no_grad():
-        outputs = model(**inputs)
-        probs = outputs.logits_per_image.softmax(dim=1)[0]
+    data = requests.get(url, timeout=15).json()
+    c = data["current"]
 
-    fire_risk = probs[0] + probs[1] + probs[4]
-    safe = probs[2] + probs[3]
-
-    score = float(fire_risk / (fire_risk + safe)) * 100
-
-    return round(score, 2), probs
+    return c["temperature_2m"], c["relative_humidity_2m"], c["wind_speed_10m"]
 
 # -------------------------
-# UI
+# IMAGE GPS EXTRACTION
+# -------------------------
+
+def get_exif(image):
+
+    exif = {}
+
+    try:
+        info = image._getexif()
+        if info:
+            for tag, value in info.items():
+                exif[TAGS.get(tag, tag)] = value
+    except:
+        pass
+
+    return exif
+
+
+def dms_to_decimal(dms, ref):
+
+    deg = float(dms[0])
+    minutes = float(dms[1])
+    sec = float(dms[2])
+
+    dec = deg + minutes / 60 + sec / 3600
+
+    if ref in ["S", "W"]:
+        dec *= -1
+
+    return dec
+
+# -------------------------
+# IMAGE ANALYSIS
+# -------------------------
+
+def analyze_image(image):
+
+    img = np.array(image.convert("RGB"))
+
+    red = img[:, :, 0]
+    green = img[:, :, 1]
+    blue = img[:, :, 2]
+
+    total = img.shape[0] * img.shape[1]
+
+    green_percent = np.sum((green > red) & (green > blue)) / total * 100
+    brown_percent = np.sum((red > green) & (green > blue)) / total * 100
+
+    return green_percent, brown_percent
+
+# -------------------------
+# UPLOAD
 # -------------------------
 
 uploaded_file = st.file_uploader(
-    "📸 Upload Image (Satellite / Forest / Fire Area)",
+    "📸 Upload GPS Photo",
     type=["jpg", "jpeg", "png"]
 )
 
 if uploaded_file:
 
     image = Image.open(uploaded_file)
+    st.image(image, use_container_width=True)
 
-    # Show image clearly
-    st.image(image, caption="🖼️ Input Image (Used by AI Model)", use_container_width=True)
+    exif = get_exif(image)
 
-    st.info("🤖 AI is analyzing image using CLIP vision model...")
+    if "GPSInfo" not in exif:
+        st.error("❌ No GPS data found in image.")
+        st.stop()
 
-    score, probs = clip_fire_score(image)
+    gps = exif["GPSInfo"]
+
+    lat = dms_to_decimal(gps[2], gps[1])
+    lon = dms_to_decimal(gps[4], gps[3])
+
+    st.success("📍 GPS Extracted")
+
+    st.write(f"Latitude: {lat:.6f}")
+    st.write(f"Longitude: {lon:.6f}")
 
     # -------------------------
-    # DISPLAY AI UNDERSTANDING
+    # WEATHER
     # -------------------------
 
-    st.subheader("🧠 AI Vision Understanding")
+    temp, humidity, wind = get_weather(lat, lon)
 
-    st.write("The AI compares your image with these concepts:")
+    # -------------------------
+    # IMAGE FEATURES
+    # -------------------------
 
-    st.write("🔥 Fire / Dry Risk Concepts")
-    st.write("- Forest fire burning")
-    st.write("- Dry forest / drought landscape")
+    green, brown = analyze_image(image)
 
-    st.write("🌿 Safe Concepts")
-    st.write("- Green healthy forest")
-    st.write("- Wet forest with water")
+    # -------------------------
+    # FACTOR MODEL
+    # -------------------------
 
-    # show probabilities
-    st.subheader("📊 Model Confidence")
+    factors = {}
 
-    st.write(f"🔥 Fire Detection Confidence: {probs[0]*100:.1f}%")
-    st.write(f"🌾 Dry Risk Confidence: {probs[1]*100:.1f}%")
-    st.write(f"🌵 Drought Confidence: {probs[4]*100:.1f}%")
-    st.write(f"🌿 Green Forest Confidence: {probs[2]*100:.1f}%")
-    st.write(f"💧 Wet Area Confidence: {probs[3]*100:.1f}%")
+    # 🌡 Temperature
+    factors["Temperature"] = min(temp, 40) / 40 * 30
 
-    # final score
-    st.subheader("🔥 Final AI Wildfire Risk Score")
+    # 💧 Dryness
+    factors["Dryness"] = (100 - humidity) / 100 * 35
 
-    st.metric("Risk Score", f"{score}/100")
+    # 💨 Wind
+    factors["Wind"] = min(wind, 50) / 50 * 20
 
-    if score > 75:
-        st.error("🔥 HIGH WILDFIRE RISK DETECTED (AI Prediction)")
-    elif score > 50:
-        st.warning("⚠️ MODERATE WILDFIRE RISK")
+    # 🌿 Green reduces risk
+    factors["Green Cover"] = -(green / 100) * 20
+
+    # 🍂 Dry vegetation increases risk
+    factors["Dry Vegetation"] = (brown / 100) * 25
+
+    # 🌳 density adjustment
+    if green > 60:
+        factors["Density"] = -10
+    elif green < 30:
+        factors["Density"] = 10
     else:
-        st.success("✅ LOW WILDFIRE RISK")
+        factors["Density"] = 0
 
-    # proof AI is using image
-    st.caption("✔ This prediction is generated directly from image pixel analysis using a CLIP vision-language AI model.")
+    # -------------------------
+    # FINAL RISK
+    # -------------------------
+
+    risk = sum(factors.values())
+    risk = max(0, min(risk, 100))
+
+    # -------------------------
+    # OUTPUT
+    # -------------------------
+
+    st.subheader("📊 Wildfire Risk Breakdown (Explainable AI)")
+
+    st.write("### 🌿 Image + Weather Inputs")
+    st.write(f"🌡 Temperature: {temp}°C")
+    st.write(f"💧 Humidity: {humidity}%")
+    st.write(f"💨 Wind: {wind} km/h")
+    st.write(f"🌿 Green Vegetation: {green:.1f}%")
+    st.write(f"🍂 Dry Vegetation: {brown:.1f}%")
+
+    st.markdown("---")
+
+    st.write("### 🧠 Factor Contributions")
+
+    for k, v in factors.items():
+        if v >= 0:
+            st.write(f"{k}: +{v:.1f}")
+        else:
+            st.write(f"{k}: {v:.1f}")
+
+    st.markdown("---")
+
+    st.metric("🔥 Final Wildfire Risk Score", f"{risk:.1f}/100")
+
+    if risk >= 75:
+        st.error("🔥 EXTREME FIRE RISK")
+    elif risk >= 50:
+        st.warning("⚠️ HIGH FIRE RISK")
+    elif risk >= 25:
+        st.info("🟡 MODERATE RISK")
+    else:
+        st.success("✅ LOW RISK")
